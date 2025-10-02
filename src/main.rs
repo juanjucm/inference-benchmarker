@@ -1,4 +1,3 @@
-use chrono::Utc;
 use clap::error::ErrorKind::InvalidValue;
 use clap::{ArgGroup, Error, Parser};
 use inference_benchmarker::{run, RunConfiguration, TokenizeOptions};
@@ -34,6 +33,10 @@ struct Args {
     /// The rates will be linearly spaced up to the detected maximum rate
     #[clap(default_value = "10", long, env)]
     num_rates: u64,
+    /// Cooldown duration between sweep rate benchmarks
+    #[clap(default_value = "5s", long, env)]
+    #[arg(value_parser = parse_duration)]
+    sweep_cooldown: Duration,
     /// A benchmark profile to use
     #[clap(long, env, group = "group_profile")]
     profile: Option<String>,
@@ -250,6 +253,7 @@ async fn main() {
         num_rates: args.num_rates,
         benchmark_kind: args.benchmark_kind.clone(),
         warmup_duration: args.warmup,
+        sweep_cooldown: args.sweep_cooldown,
         interactive: !args.no_console,
         prompt_options: args.prompt_options.clone(),
         decode_options: args.decode_options.clone(),

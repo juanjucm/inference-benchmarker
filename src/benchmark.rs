@@ -66,6 +66,9 @@ pub struct BenchmarkConfig {
     #[serde(rename = "warmup_duration_secs")]
     #[serde_as(as = "serde_with::DurationSeconds<u64>")]
     pub warmup_duration: Duration,
+    #[serde(rename = "sweep_cooldown_secs")]
+    #[serde_as(as = "serde_with::DurationSeconds<u64>")]
+    pub sweep_cooldown: Duration,
     pub rates: Option<Vec<f64>>,
     pub num_rates: u64,
     pub prompt_options: Option<TokenizeOptions>,
@@ -345,8 +348,21 @@ impl Benchmark {
         for i in 1..=num_rates {
             rates.push(i as f64 * max_throughput * THROUGHPUT_BUDGET / num_rates as f64);
         }
-        for rate in rates {
-            self.run_rate(rate).await?;
+        for (i, rate) in rates.iter().enumerate() {
+            self.run_rate(*rate).await?;
+            
+            // Add cooldown between rate benchmarks (except after the last one)
+            if i < rates.len() - 1 {
+                self.event_bus.send(Event::Message(MessageEvent {
+                    message: format!(
+                        "Cooling down for {:.1}s before next benchmark...",
+                        self.config.sweep_cooldown.as_secs_f64()
+                    ),
+                    timestamp: chrono::Utc::now(),
+                    level: log::Level::Info,
+                }))?;
+                tokio::time::sleep(self.config.sweep_cooldown).await;
+            }
         }
         Ok(())
     }
@@ -435,6 +451,7 @@ mod tests {
                 duration: Duration::from_secs(10),
                 benchmark_kind: BenchmarkKind::Sweep,
                 warmup_duration: Duration::from_secs(1),
+                sweep_cooldown: Duration::from_secs(5),
                 rates: None,
                 num_rates: 2,
                 prompt_options: None,
