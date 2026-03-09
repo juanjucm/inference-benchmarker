@@ -83,7 +83,25 @@ pub async fn run(mut run_config: RunConfiguration, stop_sender: Sender<()>) -> a
         match Tokenizer::from_pretrained(run_config.tokenizer_name.clone(), Some(params)) {
             Ok(tokenizer) => tokenizer,
             Err(e) => {
-                return Err(anyhow::anyhow!("Error loading tokenizer: {e}"));
+                // Try loading from local path as fallback
+                info!("Failed to load tokenizer from Hub, trying local path: {}", run_config.tokenizer_name);
+                debug!("Hub error: {}", e);
+
+                let local_path = Path::new(&run_config.tokenizer_name).join("tokenizer.json");
+                match Tokenizer::from_file(&local_path) {
+                    Ok(tokenizer) => {
+                        info!("Successfully loaded tokenizer from local path: {:?}", local_path);
+                        tokenizer
+                    },
+                    Err(local_err) => {
+                        return Err(anyhow::anyhow!(
+                            "Error loading tokenizer from Hub ({}) and local path ({:?}): {}",
+                            e,
+                            local_path,
+                            local_err
+                        ));
+                    }
+                }
             }
         };
     let tokenizer = Arc::new(tokenizer);
