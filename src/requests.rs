@@ -224,24 +224,31 @@ impl TextGenerationBackend for OpenAITextGenerationBackend {
                 Err(e) => {
                     match e {
                         Error::Utf8(_) => {
+                            info!("UTF-8 error in SSE stream: {e}", e = e);
                             aggregated_response.fail();
                         }
                         Error::Parser(_) => {
+                            info!("Parser error in SSE stream: {e}", e = e);
                             aggregated_response.fail();
                         }
                         Error::Transport(_) => {
+                            info!("Transport error in SSE stream: {e}", e = e);
                             aggregated_response.fail();
                         }
                         Error::InvalidContentType(_, _) => {
+                            info!("Invalid content type in SSE stream: {e}", e = e);
                             aggregated_response.fail();
                         }
                         Error::InvalidStatusCode(_, _) => {
+                            info!("Invalid status code in SSE stream: {e}", e = e);
                             aggregated_response.fail();
                         }
                         Error::InvalidLastEventId(_) => {
+                            info!("Invalid last event id in SSE stream: {e}", e = e);
                             aggregated_response.fail();
                         }
                         Error::StreamEnded => {
+                            info!("Stream ended in SSE stream");
                             if aggregated_response.num_generated_tokens == 0 {
                                 // server sent no data
                                 aggregated_response.fail();
