@@ -124,6 +124,10 @@ struct Args {
         env,
         value_parser = validate_output_path)]
     output_path: String,
+    /// Timeout for individual requests. If not set, requests will never time out.
+    /// Accepts human-readable durations like "30s", "5m", "1h".
+    #[clap(long, env, value_parser = parse_duration)]
+    request_timeout: Option<Duration>,
 }
 
 fn parse_duration(s: &str) -> Result<Duration, Error> {
@@ -264,6 +268,7 @@ async fn main() {
         model_name,
         run_id,
         output_path: expanded_output_path,
+        request_timeout: args.request_timeout,
     };
     let main_thread = tokio::spawn(async move {
         match run(run_config, stop_sender_clone).await {

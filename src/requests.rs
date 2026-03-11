@@ -63,7 +63,7 @@ pub struct OpenAITextGenerationBackend {
     pub model_name: String,
     pub client: reqwest::Client,
     pub tokenizer: Arc<Tokenizer>,
-    pub timeout: time::Duration,
+    pub timeout: Option<time::Duration>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -105,10 +105,13 @@ impl OpenAITextGenerationBackend {
         base_url: Url,
         model_name: String,
         tokenizer: Arc<Tokenizer>,
-        timeout: time::Duration,
+        timeout: Option<time::Duration>,
     ) -> anyhow::Result<Self> {
-        let client = reqwest::Client::builder()
-            .timeout(timeout)
+        let mut builder = reqwest::Client::builder();
+        if let Some(t) = timeout {
+            builder = builder.timeout(t);
+        }
+        let client = builder
             .build()
             .map_err(|e| anyhow::anyhow!("Error creating HTTP client: {e}"))?;
         Ok(Self {
@@ -141,19 +144,21 @@ impl TextGenerationBackend for OpenAITextGenerationBackend {
             model: self.model_name.clone(),
             messages,
             max_tokens: request.num_decode_tokens,
-            stream: false,
+            stream: true,
             stop: None,
             temperature: 0.0,
         };
-        let req = self
+        let mut req = self
             .client
             .post(url)
             .header(
                 "Authorization",
                 format!("Bearer {token}", token = self.api_key),
             )
-            .json(&serde_json::json!(body))
-            .timeout(self.timeout);
+            .json(&serde_json::json!(body));
+        if let Some(t) = self.timeout {
+            req = req.timeout(t);
+        }
         // start timer
         aggregated_response.start();
         let mut es = EventSource::new(req).unwrap();
@@ -857,7 +862,7 @@ mod tests {
             url,
             "gpt2".to_string(),
             tokenizer,
-            time::Duration::from_secs(10),
+            Some(time::Duration::from_secs(10)),
         )
         .unwrap();
         let request = TextGenerationRequest {
@@ -918,7 +923,7 @@ mod tests {
             url,
             "gpt2".to_string(),
             tokenizer,
-            time::Duration::from_secs(10),
+            Some(time::Duration::from_secs(10)),
         )
         .unwrap();
         let request = TextGenerationRequest {
@@ -1003,7 +1008,7 @@ mod tests {
             url,
             "gpt2".to_string(),
             tokenizer,
-            time::Duration::from_secs(10),
+            Some(time::Duration::from_secs(10)),
         )
         .unwrap();
         let request = TextGenerationRequest {
@@ -1049,7 +1054,7 @@ mod tests {
             url,
             "gpt2".to_string(),
             tokenizer,
-            time::Duration::from_secs(10),
+            Some(time::Duration::from_secs(10)),
         )
         .unwrap();
         let request = TextGenerationRequest {
@@ -1095,7 +1100,7 @@ mod tests {
             url,
             "gpt2".to_string(),
             tokenizer,
-            time::Duration::from_secs(10),
+            Some(time::Duration::from_secs(10)),
         )
         .unwrap();
         let request = TextGenerationRequest {
@@ -1145,7 +1150,7 @@ mod tests {
             url,
             "gpt2".to_string(),
             tokenizer,
-            Duration::from_secs(1),
+            Some(Duration::from_secs(1)),
         )
         .unwrap();
         let request = TextGenerationRequest {
