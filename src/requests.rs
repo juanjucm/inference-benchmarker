@@ -141,7 +141,7 @@ impl TextGenerationBackend for OpenAITextGenerationBackend {
             model: self.model_name.clone(),
             messages,
             max_tokens: request.num_decode_tokens,
-            stream: true,
+            stream: false,
             stop: None,
             temperature: 0.0,
         };
