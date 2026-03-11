@@ -248,9 +248,10 @@ impl TextGenerationBackend for OpenAITextGenerationBackend {
                             aggregated_response.fail();
                         }
                         Error::StreamEnded => {
-                            info!("Stream ended in SSE stream");
+                            info!("Stream ended in SSE stream. Response: {aggregated_response:?}");
                             if aggregated_response.num_generated_tokens == 0 {
                                 // server sent no data
+                                info!("Stream ended before receiving any data. Response: {final_response}");
                                 aggregated_response.fail();
                             }
                             if aggregated_response.end_time.is_none() {
