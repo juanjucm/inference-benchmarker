@@ -263,6 +263,7 @@ impl TextGenerationBackend for OpenAITextGenerationBackend {
                         _ => {
                             info!("Error in SSE stream: {e}", e = e);
                             aggregated_response.fail();
+                        }
                     }
                     es.close();
                 }
