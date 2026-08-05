@@ -1,4 +1,4 @@
-areuse anyhow::{Context, Result};
+use anyhow::{Context, Result};
 use base64::Engine;
 use hf_hub::api::sync::ApiBuilder;
 use rustc_hash::FxHashMap;
