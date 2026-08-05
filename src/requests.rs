@@ -75,6 +75,8 @@ pub struct OpenAITextGenerationMessage {
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct OpenAITextGenerationDelta {
     pub content: Option<String>,
+    pub reasoning: Option<String>,
+    pub reasoning_content: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -183,13 +185,27 @@ impl TextGenerationBackend for OpenAITextGenerationBackend {
                                 break;
                             }
                         };
-                    let choices = oai_response.choices;
-                    let content = choices[0]
-                        .clone()
-                        .delta
-                        .unwrap()
-                        .content
-                        .unwrap_or("".to_string());
+                    let choice = match oai_response.choices.first() {
+                        Some(choice) => choice,
+                        None => {
+                            error!("OpenAI API response did not contain a choice");
+                            aggregated_response.fail();
+                            es.close();
+                            break;
+                        }
+                    };
+                    let delta = match &choice.delta {
+                        Some(delta) => delta,
+                        None => continue,
+                    };
+                    let content = [
+                        delta.content.as_deref(),
+                        delta.reasoning.as_deref(),
+                        delta.reasoning_content.as_deref(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect::<String>();
                     if content.is_empty() {
                         // skip empty responses
                         continue;
@@ -211,7 +227,7 @@ impl TextGenerationBackend for OpenAITextGenerationBackend {
                             num_tokens = num_tokens
                         );
                     }
-                    match choices[0].clone().finish_reason {
+                    match &choice.finish_reason {
                         None => {
                             aggregated_response.add_tokens(num_tokens);
                             final_response += content.as_str();
@@ -867,6 +883,44 @@ mod tests {
             num_tokens.load(std::sync::atomic::Ordering::SeqCst),
             16 as u64
         );
+    }
+
+    #[tokio::test]
+    async fn test_openai_counts_kimi_reasoning_deltas() {
+        let mut s = mockito::Server::new_async().await;
+        s.mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_chunked_body(|writer| {
+                writer.write_all(b"data: {\"choices\":[{\"finish_reason\":null,\"delta\":{\"reasoning\":\"Hello\"}}]}\n\n")?;
+                writer.write_all(b"data: {\"choices\":[{\"finish_reason\":\"stop\",\"delta\":{\"reasoning\":\" world\"}}]}\n\n")?;
+                writer.write_all(b"data: [DONE]\n\n")
+            })
+            .create_async()
+            .await;
+        let tokenizer = Arc::new(BenchmarkTokenizer::HuggingFace(
+            Tokenizer::from_pretrained("gpt2", None).unwrap(),
+        ));
+        let backend = OpenAITextGenerationBackend::try_new(
+            "".to_string(),
+            s.url().parse().unwrap(),
+            "gpt2".to_string(),
+            tokenizer,
+            time::Duration::from_secs(10),
+        )
+        .unwrap();
+        let request = Arc::new(TextGenerationRequest {
+            id: None,
+            prompt: "Hello".to_string(),
+            num_prompt_tokens: 1,
+            num_decode_tokens: Some(2),
+        });
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        backend.generate(request, sender).await;
+        let response = receiver.recv().await.unwrap();
+
+        assert!(!response.failed);
+        assert_eq!(response.num_generated_tokens, 2);
     }
 
     /// Test that the timings are correct
