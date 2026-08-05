@@ -233,7 +233,9 @@ mod tests {
             })
             .create_async().await;
         let url = s.url().parse().unwrap();
-        let tokenizer = Arc::new(Tokenizer::from_pretrained("gpt2", None).unwrap());
+        let tokenizer = Arc::new(crate::tokenizer::BenchmarkTokenizer::HuggingFace(
+            Tokenizer::from_pretrained("gpt2", None).unwrap(),
+        ));
         let backend = OpenAITextGenerationBackend::try_new(
             "".to_string(),
             url,

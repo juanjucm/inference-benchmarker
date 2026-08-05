@@ -15,7 +15,6 @@ use chrono::Local;
 use crossterm::ExecutableCommand;
 use log::{debug, error, info, warn, Level, LevelFilter};
 use reqwest::Url;
-use tokenizers::{FromPretrainedParameters, Tokenizer};
 use tokio::sync::broadcast::Sender;
 use tokio::sync::Mutex;
 use writers::BenchmarkReportWriter;
@@ -30,6 +29,7 @@ mod requests;
 mod results;
 mod scheduler;
 mod table;
+mod tokenizer;
 mod writers;
 
 pub struct RunConfiguration {
@@ -75,35 +75,10 @@ pub async fn run(mut run_config: RunConfiguration, stop_sender: Sender<()>) -> a
         },
     };
     // initialize tokenizer
-    let params = FromPretrainedParameters {
-        token: run_config.hf_token.clone(),
-        ..Default::default()
-    };
-    let tokenizer =
-        match Tokenizer::from_pretrained(run_config.tokenizer_name.clone(), Some(params)) {
-            Ok(tokenizer) => tokenizer,
-            Err(e) => {
-                // Try loading from local path as fallback
-                info!("Failed to load tokenizer from Hub, trying local path: {}", run_config.tokenizer_name);
-                debug!("Hub error: {}", e);
-
-                let local_path = Path::new(&run_config.tokenizer_name).join("tokenizer.json");
-                match Tokenizer::from_file(&local_path) {
-                    Ok(tokenizer) => {
-                        info!("Successfully loaded tokenizer from local path: {:?}", local_path);
-                        tokenizer
-                    },
-                    Err(local_err) => {
-                        return Err(anyhow::anyhow!(
-                            "Error loading tokenizer from Hub ({}) and local path ({:?}): {}",
-                            e,
-                            local_path,
-                            local_err
-                        ));
-                    }
-                }
-            }
-        };
+    let tokenizer = tokenizer::BenchmarkTokenizer::load(
+        &run_config.tokenizer_name,
+        run_config.hf_token.clone(),
+    )?;
     let tokenizer = Arc::new(tokenizer);
     let backend = OpenAITextGenerationBackend::try_new(
         run_config.api_key,

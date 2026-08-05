@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use crate::tokenizer::BenchmarkTokenizer;
 use futures_util::StreamExt;
 use hf_hub::api::sync::ApiBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -12,10 +13,9 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::fmt::Display;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time;
-use tokenizers::{FromPretrainedParameters, Tokenizer};
 use tokio::sync::mpsc::Sender;
 use tokio::time::{sleep, Instant};
 use uuid::Uuid;
@@ -62,7 +62,7 @@ pub struct OpenAITextGenerationBackend {
     pub base_url: Url,
     pub model_name: String,
     pub client: reqwest::Client,
-    pub tokenizer: Arc<Tokenizer>,
+    pub tokenizer: Arc<BenchmarkTokenizer>,
     pub timeout: time::Duration,
 }
 
@@ -104,7 +104,7 @@ impl OpenAITextGenerationBackend {
         api_key: String,
         base_url: Url,
         model_name: String,
-        tokenizer: Arc<Tokenizer>,
+        tokenizer: Arc<BenchmarkTokenizer>,
         timeout: time::Duration,
     ) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
@@ -196,8 +196,15 @@ impl TextGenerationBackend for OpenAITextGenerationBackend {
                     }
                     // we need to count the number of tokens generated as each delta chunk may contain multiple tokens
                     // that's the case with vLLM chunked prefill or speculative decoding
-                    let num_tokens =
-                        self.tokenizer.encode(content.clone(), false).unwrap().len() as u64;
+                    let num_tokens = match self.tokenizer.encode(&content) {
+                        Ok(tokens) => tokens.len() as u64,
+                        Err(e) => {
+                            error!("Error tokenizing generated content: {e}");
+                            aggregated_response.fail();
+                            es.close();
+                            break;
+                        }
+                    };
                     if num_tokens > 1 {
                         warn!(
                             "Generated more than one token: {num_tokens}",
@@ -387,7 +394,7 @@ impl PartialOrd for ConversationTurnRequest {
 pub struct ConversationTextRequestGenerator {
     pub requests: HashMap<Uuid, ConversationTurnRequest>,
     pub queue: BinaryHeap<ConversationTurnRequest>,
-    pub tokenizer: Arc<Tokenizer>,
+    pub tokenizer: Arc<BenchmarkTokenizer>,
 }
 
 impl ConversationTextRequestGenerator {
@@ -407,35 +414,7 @@ impl ConversationTextRequestGenerator {
         decode_tokenize_opts: Option<TokenizeOptions>,
         hf_token: Option<String>,
     ) -> anyhow::Result<Self> {
-        let params = FromPretrainedParameters {
-            token: hf_token,
-            ..Default::default()
-        };
-        let tokenizer = match Tokenizer::from_pretrained(tokenizer.clone(), Some(params)) {
-            Ok(tokenizer) => tokenizer,
-            Err(e) => {
-                // Try loading from local path as fallback
-                info!("Failed to load tokenizer from Hub, trying local path: {}", tokenizer);
-                debug!("Hub error: {}", e);
-
-                let local_path = Path::new(&tokenizer).join("tokenizer.json");
-                match Tokenizer::from_file(&local_path) {
-                    Ok(tokenizer) => {
-                        info!("Successfully loaded tokenizer from local path: {:?}", local_path);
-                        tokenizer
-                    },
-                    Err(local_err) => {
-                        return Err(anyhow::anyhow!(
-                            "Error loading tokenizer from Hub ({}) and local path ({:?}): {}",
-                            e,
-                            local_path,
-                            local_err
-                        ));
-                    }
-                }
-            }
-        };
-        let tokenizer = Arc::new(tokenizer);
+        let tokenizer = Arc::new(BenchmarkTokenizer::load(&tokenizer, hf_token)?);
         // load json file
         let input = std::fs::read_to_string(&filepath)?;
         let data: Vec<ConversationEntry> = serde_json::from_str(&input).expect("Unable to parse input file. Check that it is valid JSON and matches the expected format.");
@@ -692,12 +671,10 @@ impl TextRequestGenerator for DummyTextRequestGenerator {
 
 fn tokenize_prompt(
     prompt: String,
-    tokenizer: Arc<Tokenizer>,
+    tokenizer: Arc<BenchmarkTokenizer>,
     options: &TokenizeOptions,
 ) -> anyhow::Result<(String, u64)> {
-    let prompt_tokens = tokenizer
-        .encode(prompt.clone(), false)
-        .map_err(|_| anyhow::anyhow!("Error tokenizing prompt"))?;
+    let prompt_tokens = tokenizer.encode(&prompt)?;
     match options.num_tokens {
         None => {
             // check if we have a min/max number of tokens, skip prompts that are too short or too long
@@ -722,12 +699,11 @@ fn tokenize_prompt(
                 )));
             }
             let tokens = prompt_tokens
-                .get_ids()
                 .iter()
                 .take(num_tokens as usize)
                 .copied()
                 .collect::<Vec<u32>>();
-            let prompt = tokenizer.decode(&tokens, true).unwrap();
+            let prompt = tokenizer.decode(&tokens)?;
             Ok((prompt, num_tokens))
         }
     }
@@ -831,6 +807,7 @@ mod tests {
     use crate::executors::ExecutorConfig;
     use crate::results::BenchmarkResults;
     use crate::scheduler::ExecutorType;
+    use tokenizers::Tokenizer;
     use std::sync::atomic::AtomicU64;
     use std::thread::sleep;
     use std::time::Duration;
@@ -851,7 +828,9 @@ mod tests {
             })
             .create_async().await;
         let url = s.url().parse().unwrap();
-        let tokenizer = Arc::new(Tokenizer::from_pretrained("gpt2", None).unwrap());
+        let tokenizer = Arc::new(BenchmarkTokenizer::HuggingFace(
+            Tokenizer::from_pretrained("gpt2", None).unwrap(),
+        ));
         let backend = OpenAITextGenerationBackend::try_new(
             "".to_string(),
             url,
@@ -912,7 +891,9 @@ mod tests {
             })
             .create_async().await;
         let url = s.url().parse().unwrap();
-        let tokenizer = Arc::new(Tokenizer::from_pretrained("gpt2", None).unwrap());
+        let tokenizer = Arc::new(BenchmarkTokenizer::HuggingFace(
+            Tokenizer::from_pretrained("gpt2", None).unwrap(),
+        ));
         let backend = OpenAITextGenerationBackend::try_new(
             "".to_string(),
             url,
@@ -997,7 +978,9 @@ mod tests {
             .create_async()
             .await;
         let url = s.url().parse().unwrap();
-        let tokenizer = Arc::new(Tokenizer::from_pretrained("gpt2", None).unwrap());
+        let tokenizer = Arc::new(BenchmarkTokenizer::HuggingFace(
+            Tokenizer::from_pretrained("gpt2", None).unwrap(),
+        ));
         let backend = OpenAITextGenerationBackend::try_new(
             "".to_string(),
             url,
@@ -1043,7 +1026,9 @@ mod tests {
             .create_async()
             .await;
         let url = s.url().parse().unwrap();
-        let tokenizer = Arc::new(Tokenizer::from_pretrained("gpt2", None).unwrap());
+        let tokenizer = Arc::new(BenchmarkTokenizer::HuggingFace(
+            Tokenizer::from_pretrained("gpt2", None).unwrap(),
+        ));
         let backend = OpenAITextGenerationBackend::try_new(
             "".to_string(),
             url,
@@ -1089,7 +1074,9 @@ mod tests {
             .create_async()
             .await;
         let url = s.url().parse().unwrap();
-        let tokenizer = Arc::new(Tokenizer::from_pretrained("gpt2", None).unwrap());
+        let tokenizer = Arc::new(BenchmarkTokenizer::HuggingFace(
+            Tokenizer::from_pretrained("gpt2", None).unwrap(),
+        ));
         let backend = OpenAITextGenerationBackend::try_new(
             "".to_string(),
             url,
@@ -1139,7 +1126,9 @@ mod tests {
             })
             .create_async().await;
         let url = s.url().parse().unwrap();
-        let tokenizer = Arc::new(Tokenizer::from_pretrained("gpt2", None).unwrap());
+        let tokenizer = Arc::new(BenchmarkTokenizer::HuggingFace(
+            Tokenizer::from_pretrained("gpt2", None).unwrap(),
+        ));
         let backend = OpenAITextGenerationBackend::try_new(
             "".to_string(),
             url,
